@@ -1,14 +1,16 @@
 /* global chrome */
 
 import {createElement} from 'react';
-import {createRoot, flushSync} from 'react-dom';
+import {unstable_createRoot as createRoot, flushSync} from 'react-dom';
 import Bridge from 'react-devtools-shared/src/bridge';
 import Store from 'react-devtools-shared/src/devtools/store';
 import {getBrowserName, getBrowserTheme} from './utils';
 import {LOCAL_STORAGE_TRACE_UPDATES_ENABLED_KEY} from 'react-devtools-shared/src/constants';
 import {
-  getSavedComponentFilters,
   getAppendComponentStack,
+  getBreakOnConsoleErrors,
+  getSavedComponentFilters,
+  getShowInlineWarningsAndErrors,
 } from 'react-devtools-shared/src/utils';
 import {
   localStorageGetItem,
@@ -28,17 +30,18 @@ let panelCreated = false;
 // because they are stored in localStorage within the context of the extension.
 // Instead it relies on the extension to pass filters through.
 function syncSavedPreferences() {
-  const componentFilters = getSavedComponentFilters();
-  chrome.devtools.inspectedWindow.eval(
-    `window.__REACT_DEVTOOLS_COMPONENT_FILTERS__ = ${JSON.stringify(
-      componentFilters,
-    )};`,
-  );
-
-  const appendComponentStack = getAppendComponentStack();
   chrome.devtools.inspectedWindow.eval(
     `window.__REACT_DEVTOOLS_APPEND_COMPONENT_STACK__ = ${JSON.stringify(
-      appendComponentStack,
+      getAppendComponentStack(),
+    )};
+    window.__REACT_DEVTOOLS_BREAK_ON_CONSOLE_ERRORS__ = ${JSON.stringify(
+      getBreakOnConsoleErrors(),
+    )};
+    window.__REACT_DEVTOOLS_COMPONENT_FILTERS__ = ${JSON.stringify(
+      getSavedComponentFilters(),
+    )};
+    window.__REACT_DEVTOOLS_SHOW_INLINE_WARNINGS_AND_ERRORS__ = ${JSON.stringify(
+      getShowInlineWarningsAndErrors(),
     )};`,
   );
 }
@@ -228,11 +231,11 @@ function createPanelIfReactLoaded() {
       cloneStyleTags = () => {
         const linkTags = [];
         // eslint-disable-next-line no-for-of-loops/no-for-of-loops
-        for (let linkTag of document.getElementsByTagName('link')) {
+        for (const linkTag of document.getElementsByTagName('link')) {
           if (linkTag.rel === 'stylesheet') {
             const newLinkTag = document.createElement('link');
             // eslint-disable-next-line no-for-of-loops/no-for-of-loops
-            for (let attribute of linkTag.attributes) {
+            for (const attribute of linkTag.attributes) {
               newLinkTag.setAttribute(attribute.nodeName, attribute.nodeValue);
             }
             linkTags.push(newLinkTag);
@@ -294,7 +297,7 @@ function createPanelIfReactLoaded() {
       let needsToSyncElementSelection = false;
 
       chrome.devtools.panels.create(
-        isChrome ? '⚛ Components' : 'Components',
+        isChrome ? '⚛️ Components' : 'Components',
         '',
         'panel.html',
         extensionPanel => {
@@ -324,7 +327,7 @@ function createPanelIfReactLoaded() {
       );
 
       chrome.devtools.panels.create(
-        isChrome ? '⚛ Profiler' : 'Profiler',
+        isChrome ? '⚛️ Profiler' : 'Profiler',
         '',
         'panel.html',
         extensionPanel => {

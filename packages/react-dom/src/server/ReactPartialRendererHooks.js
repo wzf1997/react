@@ -7,19 +7,20 @@
  * @flow
  */
 
+import type {Dispatcher as DispatcherType} from 'react-reconciler/src/ReactInternalTypes';
+
 import type {
-  Dispatcher as DispatcherType,
-  TimeoutConfig,
-} from 'react-reconciler/src/ReactFiberHooks';
-import type {ThreadID} from './ReactThreadIDAllocator';
-import type {
+  MutableSource,
+  MutableSourceGetSnapshotFn,
+  MutableSourceSubscribeFn,
   ReactContext,
-  ReactEventResponderListener,
 } from 'shared/ReactTypes';
-import type {SuspenseConfig} from 'react-reconciler/src/ReactFiberSuspenseConfig';
+import type PartialRenderer from './ReactPartialRenderer';
+
 import {validateContextBounds} from './ReactPartialRendererContext';
 
 import invariant from 'shared/invariant';
+import {enableCache} from 'shared/ReactFeatureFlags';
 import is from 'shared/objectIs';
 
 type BasicStateAction<S> = (S => S) | S;
@@ -40,6 +41,8 @@ type Hook = {|
   queue: UpdateQueue<any> | null,
   next: Hook | null,
 |};
+
+type OpaqueIDType = string;
 
 let currentlyRenderingComponent: Object | null = null;
 let firstWorkInProgressHook: Hook | null = null;
@@ -67,7 +70,7 @@ function resolveCurrentlyRenderingComponent(): Object {
       '1. You might have mismatching versions of React and the renderer (such as React DOM)\n' +
       '2. You might be breaking the Rules of Hooks\n' +
       '3. You might have more than one copy of React in the same app\n' +
-      'See https://fb.me/react-invalid-hook-call for tips about how to debug and fix this problem.',
+      'See https://reactjs.org/link/invalid-hook-call for tips about how to debug and fix this problem.',
   );
   if (__DEV__) {
     if (isInHookUserCodeInDev) {
@@ -75,7 +78,7 @@ function resolveCurrentlyRenderingComponent(): Object {
         'Do not call Hooks inside useEffect(...), useMemo(...), or other built-in Hooks. ' +
           'You can only call Hooks at the top level of your React function. ' +
           'For more information, see ' +
-          'https://fb.me/rules-of-hooks',
+          'https://reactjs.org/link/rules-of-hooks',
       );
     }
   }
@@ -194,31 +197,33 @@ export function finishHooks(
 
     children = Component(props, refOrContext);
   }
-  currentlyRenderingComponent = null;
-  firstWorkInProgressHook = null;
-  numberOfReRenders = 0;
-  renderPhaseUpdates = null;
-  workInProgressHook = null;
+  resetHooksState();
+  return children;
+}
+
+// Reset the internal hooks state if an error occurs while rendering a component
+export function resetHooksState(): void {
   if (__DEV__) {
     isInHookUserCodeInDev = false;
   }
 
-  // These were reset above
-  // currentlyRenderingComponent = null;
-  // didScheduleRenderPhaseUpdate = false;
-  // firstWorkInProgressHook = null;
-  // numberOfReRenders = 0;
-  // renderPhaseUpdates = null;
-  // workInProgressHook = null;
+  currentlyRenderingComponent = null;
+  didScheduleRenderPhaseUpdate = false;
+  firstWorkInProgressHook = null;
+  numberOfReRenders = 0;
+  renderPhaseUpdates = null;
+  workInProgressHook = null;
+}
 
-  return children;
+function getCacheForType<T>(resourceType: () => T): T {
+  invariant(false, 'Not implemented.');
 }
 
 function readContext<T>(
   context: ReactContext<T>,
   observedBits: void | number | boolean,
 ): T {
-  let threadID = currentThreadID;
+  const threadID = currentPartialRenderer.threadID;
   validateContextBounds(context, threadID);
   if (__DEV__) {
     if (isInHookUserCodeInDev) {
@@ -241,7 +246,7 @@ function useContext<T>(
     currentHookNameInDev = 'useContext';
   }
   resolveCurrentlyRenderingComponent();
-  let threadID = currentThreadID;
+  const threadID = currentPartialRenderer.threadID;
   validateContextBounds(context, threadID);
   return context[threadID];
 }
@@ -398,7 +403,7 @@ export function useLayoutEffect(
         'to a mismatch between the initial, non-hydrated UI and the intended ' +
         'UI. To avoid this, useLayoutEffect should only be used in ' +
         'components that render exclusively on the client. ' +
-        'See https://fb.me/react-uselayouteffect-ssr for common fixes.',
+        'See https://reactjs.org/link/uselayouteffect-ssr for common fixes.',
     );
   }
 }
@@ -448,25 +453,27 @@ export function useCallback<T>(
   callback: T,
   deps: Array<mixed> | void | null,
 ): T {
-  // Callbacks are passed as they are in the server environment.
-  return callback;
+  return useMemo(() => callback, deps);
 }
 
-function useResponder(responder, props): ReactEventResponderListener<any, any> {
-  return {
-    props,
-    responder,
-  };
+// TODO Decide on how to implement this hook for server rendering.
+// If a mutation occurs during render, consider triggering a Suspense boundary
+// and falling back to client rendering.
+function useMutableSource<Source, Snapshot>(
+  source: MutableSource<Source>,
+  getSnapshot: MutableSourceGetSnapshotFn<Source, Snapshot>,
+  subscribe: MutableSourceSubscribeFn<Source, Snapshot>,
+): Snapshot {
+  resolveCurrentlyRenderingComponent();
+  return getSnapshot(source._source);
 }
 
-function useDeferredValue<T>(value: T, config: TimeoutConfig | null | void): T {
+function useDeferredValue<T>(value: T): T {
   resolveCurrentlyRenderingComponent();
   return value;
 }
 
-function useTransition(
-  config: SuspenseConfig | null | void,
-): [(callback: () => void) => void, boolean] {
+function useTransition(): [(callback: () => void) => void, boolean] {
   resolveCurrentlyRenderingComponent();
   const startTransition = callback => {
     callback();
@@ -474,12 +481,23 @@ function useTransition(
   return [startTransition, false];
 }
 
+function useOpaqueIdentifier(): OpaqueIDType {
+  return (
+    (currentPartialRenderer.identifierPrefix || '') +
+    'R:' +
+    (currentPartialRenderer.uniqueID++).toString(36)
+  );
+}
+
+function useCacheRefresh(): <T>(?() => T, ?T) => void {
+  invariant(false, 'Not implemented.');
+}
+
 function noop(): void {}
 
-export let currentThreadID: ThreadID = 0;
-
-export function setCurrentThreadID(threadID: ThreadID) {
-  currentThreadID = threadID;
+export let currentPartialRenderer: PartialRenderer = (null: any);
+export function setCurrentPartialRenderer(renderer: PartialRenderer) {
+  currentPartialRenderer = renderer;
 }
 
 export const Dispatcher: DispatcherType = {
@@ -497,7 +515,14 @@ export const Dispatcher: DispatcherType = {
   useEffect: noop,
   // Debugging effect
   useDebugValue: noop,
-  useResponder,
   useDeferredValue,
   useTransition,
+  useOpaqueIdentifier,
+  // Subscriptions are not setup in a server environment.
+  useMutableSource,
 };
+
+if (enableCache) {
+  Dispatcher.getCacheForType = getCacheForType;
+  Dispatcher.useCacheRefresh = useCacheRefresh;
+}

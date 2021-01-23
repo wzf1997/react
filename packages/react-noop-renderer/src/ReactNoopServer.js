@@ -14,11 +14,11 @@
  * environment.
  */
 
-import ReactFizzStreamer from 'react-server';
+import ReactFizzServer from 'react-server';
 
 type Destination = Array<string>;
 
-const ReactNoopServer = ReactFizzStreamer({
+const ReactNoopServer = ReactFizzServer({
   scheduleWork(callback: () => void) {
     callback();
   },
@@ -41,8 +41,8 @@ const ReactNoopServer = ReactFizzStreamer({
 });
 
 function render(children: React$Element<any>): Destination {
-  let destination: Destination = [];
-  let request = ReactNoopServer.createRequest(children, destination);
+  const destination: Destination = [];
+  const request = ReactNoopServer.createRequest(children, destination);
   ReactNoopServer.startWork(request);
   return destination;
 }

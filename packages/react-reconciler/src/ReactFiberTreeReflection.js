@@ -7,9 +7,9 @@
  * @flow
  */
 
-import type {Fiber} from './ReactFiber';
+import type {Fiber} from './ReactInternalTypes';
 import type {Container, SuspenseInstance} from './ReactFiberHostConfig';
-import type {SuspenseState} from './ReactFiberSuspenseComponent';
+import type {SuspenseState} from './ReactFiberSuspenseComponent.old';
 
 import invariant from 'shared/invariant';
 
@@ -24,8 +24,8 @@ import {
   HostText,
   FundamentalComponent,
   SuspenseComponent,
-} from 'shared/ReactWorkTags';
-import {NoEffect, Placement, Hydrating} from 'shared/ReactSideEffectTags';
+} from './ReactWorkTags';
+import {NoFlags, Placement, Hydrating} from './ReactFiberFlags';
 import {enableFundamentalAPI} from 'shared/ReactFeatureFlags';
 
 const ReactCurrentOwner = ReactSharedInternals.ReactCurrentOwner;
@@ -39,7 +39,7 @@ export function getNearestMountedFiber(fiber: Fiber): null | Fiber {
     let nextNode = node;
     do {
       node = nextNode;
-      if ((node.effectTag & (Placement | Hydrating)) !== NoEffect) {
+      if ((node.flags & (Placement | Hydrating)) !== NoFlags) {
         // This is an insertion or in-progress hydration. The nearest possible
         // mounted fiber is the parent but we need to continue to figure out
         // if that one is still mounted.
@@ -125,7 +125,7 @@ function assertIsMounted(fiber) {
 }
 
 export function findCurrentFiberUsingSlowPath(fiber: Fiber): Fiber | null {
-  let alternate = fiber.alternate;
+  const alternate = fiber.alternate;
   if (!alternate) {
     // If there is no alternate, then we only need to check if it is mounted.
     const nearestMounted = getNearestMountedFiber(fiber);
@@ -144,12 +144,12 @@ export function findCurrentFiberUsingSlowPath(fiber: Fiber): Fiber | null {
   let a: Fiber = fiber;
   let b: Fiber = alternate;
   while (true) {
-    let parentA = a.return;
+    const parentA = a.return;
     if (parentA === null) {
       // We're at the root.
       break;
     }
-    let parentB = parentA.alternate;
+    const parentB = parentA.alternate;
     if (parentB === null) {
       // There is no alternate. This is an unusual case. Currently, it only
       // happens when a Suspense component is hidden. An extra fragment fiber
@@ -265,70 +265,80 @@ export function findCurrentFiberUsingSlowPath(fiber: Fiber): Fiber | null {
 
 export function findCurrentHostFiber(parent: Fiber): Fiber | null {
   const currentParent = findCurrentFiberUsingSlowPath(parent);
-  if (!currentParent) {
-    return null;
+  return currentParent !== null
+    ? findCurrentHostFiberImpl(currentParent)
+    : null;
+}
+
+function findCurrentHostFiberImpl(node: Fiber) {
+  // Next we'll drill down this component to find the first HostComponent/Text.
+  if (node.tag === HostComponent || node.tag === HostText) {
+    return node;
   }
 
-  // Next we'll drill down this component to find the first HostComponent/Text.
-  let node: Fiber = currentParent;
-  while (true) {
-    if (node.tag === HostComponent || node.tag === HostText) {
-      return node;
-    } else if (node.child) {
-      node.child.return = node;
-      node = node.child;
-      continue;
+  let child = node.child;
+  while (child !== null) {
+    const match = findCurrentHostFiberImpl(child);
+    if (match !== null) {
+      return match;
     }
-    if (node === currentParent) {
-      return null;
-    }
-    while (!node.sibling) {
-      if (!node.return || node.return === currentParent) {
-        return null;
-      }
-      node = node.return;
-    }
-    node.sibling.return = node.return;
-    node = node.sibling;
+    child = child.sibling;
   }
-  // Flow needs the return null here, but ESLint complains about it.
-  // eslint-disable-next-line no-unreachable
+
   return null;
 }
 
 export function findCurrentHostFiberWithNoPortals(parent: Fiber): Fiber | null {
   const currentParent = findCurrentFiberUsingSlowPath(parent);
-  if (!currentParent) {
-    return null;
+  return currentParent !== null
+    ? findCurrentHostFiberWithNoPortalsImpl(currentParent)
+    : null;
+}
+
+function findCurrentHostFiberWithNoPortalsImpl(node: Fiber) {
+  // Next we'll drill down this component to find the first HostComponent/Text.
+  if (
+    node.tag === HostComponent ||
+    node.tag === HostText ||
+    (enableFundamentalAPI && node.tag === FundamentalComponent)
+  ) {
+    return node;
   }
 
-  // Next we'll drill down this component to find the first HostComponent/Text.
-  let node: Fiber = currentParent;
-  while (true) {
-    if (
-      node.tag === HostComponent ||
-      node.tag === HostText ||
-      (enableFundamentalAPI && node.tag === FundamentalComponent)
-    ) {
-      return node;
-    } else if (node.child && node.tag !== HostPortal) {
-      node.child.return = node;
-      node = node.child;
-      continue;
-    }
-    if (node === currentParent) {
-      return null;
-    }
-    while (!node.sibling) {
-      if (!node.return || node.return === currentParent) {
-        return null;
+  let child = node.child;
+  while (child !== null) {
+    if (child.tag !== HostPortal) {
+      const match = findCurrentHostFiberWithNoPortalsImpl(child);
+      if (match !== null) {
+        return match;
       }
-      node = node.return;
     }
-    node.sibling.return = node.return;
-    node = node.sibling;
+    child = child.sibling;
   }
-  // Flow needs the return null here, but ESLint complains about it.
-  // eslint-disable-next-line no-unreachable
+
   return null;
+}
+
+export function isFiberSuspenseAndTimedOut(fiber: Fiber): boolean {
+  const memoizedState = fiber.memoizedState;
+  return (
+    fiber.tag === SuspenseComponent &&
+    memoizedState !== null &&
+    memoizedState.dehydrated === null
+  );
+}
+
+export function doesFiberContain(
+  parentFiber: Fiber,
+  childFiber: Fiber,
+): boolean {
+  let node = childFiber;
+  const parentFiberAlternate = parentFiber.alternate;
+  while (node !== null) {
+    if (node === parentFiber || node === parentFiberAlternate) {
+      return true;
+    }
+    node = node.return;
+  }
+  return false;
 }

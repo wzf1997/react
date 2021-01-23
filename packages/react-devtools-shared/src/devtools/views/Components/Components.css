@@ -9,12 +9,17 @@
   font-family: var(--font-family-sans);
 }
 
+.Components, .Components * {
+  box-sizing: border-box;
+  -webkit-font-smoothing: var(--font-smoothing);
+}
+
 .TreeWrapper {
   flex: 0 0 var(--horizontal-resize-percentage);
   overflow: auto;
 }
 
-.SelectedElementWrapper {
+.InspectedElementWrapper {
   flex: 1 1 35%;
   overflow-x: hidden;
   overflow-y: auto;
@@ -42,7 +47,7 @@
     flex: 0 0 var(--vertical-resize-percentage);
   }
 
-  .SelectedElementWrapper {
+  .InspectedElementWrapper {
     flex: 1 1 50%;
   }
 

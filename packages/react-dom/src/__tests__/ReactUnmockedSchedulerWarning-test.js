@@ -16,7 +16,9 @@ function App() {
 
 beforeEach(() => {
   jest.resetModules();
-  jest.unmock('scheduler');
+  jest.mock('scheduler', () =>
+    require.requireActual('scheduler/unstable_no_dom'),
+  );
   React = require('react');
   ReactDOM = require('react-dom');
 });
@@ -27,9 +29,10 @@ it('does not warn when rendering in legacy mode', () => {
   }).toErrorDev([]);
 });
 
-it.experimental('should warn when rendering in concurrent mode', () => {
+// @gate experimental
+it('should warn when rendering in concurrent mode', () => {
   expect(() => {
-    ReactDOM.createRoot(document.createElement('div')).render(<App />);
+    ReactDOM.unstable_createRoot(document.createElement('div')).render(<App />);
   }).toErrorDev(
     'In Concurrent or Sync modes, the "scheduler" module needs to be mocked ' +
       'to guarantee consistent behaviour across tests and browsers.',
@@ -37,13 +40,16 @@ it.experimental('should warn when rendering in concurrent mode', () => {
   );
   // does not warn twice
   expect(() => {
-    ReactDOM.createRoot(document.createElement('div')).render(<App />);
+    ReactDOM.unstable_createRoot(document.createElement('div')).render(<App />);
   }).toErrorDev([]);
 });
 
-it.experimental('should warn when rendering in blocking mode', () => {
+// @gate experimental
+it('should warn when rendering in blocking mode', () => {
   expect(() => {
-    ReactDOM.createBlockingRoot(document.createElement('div')).render(<App />);
+    ReactDOM.unstable_createBlockingRoot(document.createElement('div')).render(
+      <App />,
+    );
   }).toErrorDev(
     'In Concurrent or Sync modes, the "scheduler" module needs to be mocked ' +
       'to guarantee consistent behaviour across tests and browsers.',
@@ -51,6 +57,8 @@ it.experimental('should warn when rendering in blocking mode', () => {
   );
   // does not warn twice
   expect(() => {
-    ReactDOM.createBlockingRoot(document.createElement('div')).render(<App />);
+    ReactDOM.unstable_createBlockingRoot(document.createElement('div')).render(
+      <App />,
+    );
   }).toErrorDev([]);
 });

@@ -17,7 +17,6 @@ import {
   useRef,
 } from 'react';
 import Tree from './Tree';
-import {InspectedElementContextController} from './InspectedElementContext';
 import {OwnersListContextController} from './OwnersListContext';
 import portaledContent from '../portaledContent';
 import {SettingsModalContextController} from 'react-devtools-shared/src/devtools/views/Settings/SettingsModalContext';
@@ -25,18 +24,39 @@ import {
   localStorageGetItem,
   localStorageSetItem,
 } from 'react-devtools-shared/src/storage';
-import SelectedElement from './SelectedElement';
+import InspectedElementErrorBoundary from './InspectedElementErrorBoundary';
+import InspectedElement from './InspectedElement';
+import {InspectedElementContextController} from './InspectedElementContext';
 import {ModalDialog} from '../ModalDialog';
 import SettingsModal from 'react-devtools-shared/src/devtools/views/Settings/SettingsModal';
 import {NativeStyleContextController} from './NativeStyleEditor/context';
 
 import styles from './Components.css';
 
-function Components(_: {||}) {
-  const wrapperElementRef = useRef<HTMLElement>(null);
-  const resizeElementRef = useRef<HTMLElement>(null);
+type Orientation = 'horizontal' | 'vertical';
 
-  const [state, dispatch] = useReducer<ResizeState, ResizeAction>(
+type ResizeActionType =
+  | 'ACTION_SET_DID_MOUNT'
+  | 'ACTION_SET_IS_RESIZING'
+  | 'ACTION_SET_HORIZONTAL_PERCENTAGE'
+  | 'ACTION_SET_VERTICAL_PERCENTAGE';
+
+type ResizeAction = {|
+  type: ResizeActionType,
+  payload: any,
+|};
+
+type ResizeState = {|
+  horizontalPercentage: number,
+  isResizing: boolean,
+  verticalPercentage: number,
+|};
+
+function Components(_: {||}) {
+  const wrapperElementRef = useRef<null | HTMLElement>(null);
+  const resizeElementRef = useRef<null | HTMLElement>(null);
+
+  const [state, dispatch] = useReducer<ResizeState, any, ResizeAction>(
     resizeReducer,
     null,
     initResizeState,
@@ -132,32 +152,34 @@ function Components(_: {||}) {
   return (
     <SettingsModalContextController>
       <OwnersListContextController>
-        <InspectedElementContextController>
-          <div
-            ref={wrapperElementRef}
-            className={styles.Components}
-            onMouseMove={onResize}
-            onMouseLeave={onResizeEnd}
-            onMouseUp={onResizeEnd}>
-            <Fragment>
-              <div ref={resizeElementRef} className={styles.TreeWrapper}>
-                <Tree />
-              </div>
-              <div className={styles.ResizeBarWrapper}>
-                <div onMouseDown={onResizeStart} className={styles.ResizeBar} />
-              </div>
-              <div className={styles.SelectedElementWrapper}>
-                <NativeStyleContextController>
+        <div
+          ref={wrapperElementRef}
+          className={styles.Components}
+          onMouseMove={onResize}
+          onMouseLeave={onResizeEnd}
+          onMouseUp={onResizeEnd}>
+          <Fragment>
+            <div ref={resizeElementRef} className={styles.TreeWrapper}>
+              <Tree />
+            </div>
+            <div className={styles.ResizeBarWrapper}>
+              <div onMouseDown={onResizeStart} className={styles.ResizeBar} />
+            </div>
+            <div className={styles.InspectedElementWrapper}>
+              <NativeStyleContextController>
+                <InspectedElementErrorBoundary>
                   <Suspense fallback={<Loading />}>
-                    <SelectedElement />
+                    <InspectedElementContextController>
+                      <InspectedElement />
+                    </InspectedElementContextController>
                   </Suspense>
-                </NativeStyleContextController>
-              </div>
-              <ModalDialog />
-              <SettingsModal />
-            </Fragment>
-          </div>
-        </InspectedElementContextController>
+                </InspectedElementErrorBoundary>
+              </NativeStyleContextController>
+            </div>
+            <ModalDialog />
+            <SettingsModal />
+          </Fragment>
+        </div>
       </OwnersListContextController>
     </SettingsModalContextController>
   );
@@ -170,25 +192,6 @@ function Loading() {
 const LOCAL_STORAGE_KEY = 'React::DevTools::createResizeReducer';
 const VERTICAL_MODE_MAX_WIDTH = 600;
 const MINIMUM_SIZE = 50;
-
-type Orientation = 'horizontal' | 'vertical';
-
-type ResizeActionType =
-  | 'ACTION_SET_DID_MOUNT'
-  | 'ACTION_SET_IS_RESIZING'
-  | 'ACTION_SET_HORIZONTAL_PERCENTAGE'
-  | 'ACTION_SET_VERTICAL_PERCENTAGE';
-
-type ResizeAction = {|
-  type: ResizeActionType,
-  payload: any,
-|};
-
-type ResizeState = {|
-  horizontalPercentage: number,
-  isResizing: boolean,
-  verticalPercentage: number,
-|};
 
 function initResizeState(): ResizeState {
   let horizontalPercentage = 0.65;

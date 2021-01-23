@@ -7,27 +7,44 @@
  * @flow
  */
 
-import {getInternalReactConstants} from './renderer';
-import describeComponentFrame from './describeComponentFrame';
+import type {Fiber} from 'react-reconciler/src/ReactInternalTypes';
+import type {CurrentDispatcherRef, ReactRenderer, WorkTagMap} from './types';
 
-import type {Fiber} from 'react-reconciler/src/ReactFiber';
-import type {ReactRenderer} from './types';
+import {getInternalReactConstants} from './renderer';
+import {getStackByFiberInDevAndProd} from './DevToolsFiberComponentStack';
 
 const APPEND_STACK_TO_METHODS = ['error', 'trace', 'warn'];
 
-const FRAME_REGEX = /\n {4}in /;
+// React's custom built component stack strings match "\s{4}in"
+// Chrome's prefix matches "\s{4}at"
+const PREFIX_REGEX = /\s{4}(in|at)\s{1}/;
+// Firefox and Safari have no prefix ("")
+// but we can fallback to looking for location info (e.g. "foo.js:12:345")
+const ROW_COLUMN_NUMBER_REGEX = /:\d+:\d+(\n|$)/;
+
+export function isStringComponentStack(text: string): boolean {
+  return PREFIX_REGEX.test(text) || ROW_COLUMN_NUMBER_REGEX.test(text);
+}
+
+type OnErrorOrWarning = (
+  fiber: Fiber,
+  type: 'error' | 'warn',
+  args: Array<any>,
+) => void;
 
 const injectedRenderers: Map<
   ReactRenderer,
   {|
+    currentDispatcherRef: CurrentDispatcherRef,
     getCurrentFiber: () => Fiber | null,
-    getDisplayNameForFiber: (fiber: Fiber) => string | null,
+    onErrorOrWarning: ?OnErrorOrWarning,
+    workTagMap: WorkTagMap,
   |},
 > = new Map();
 
 let targetConsole: Object = console;
 let targetConsoleMethods = {};
-for (let method in console) {
+for (const method in console) {
   targetConsoleMethods[method] = console[method];
 }
 
@@ -40,7 +57,7 @@ export function dangerous_setTargetConsoleForTesting(
   targetConsole = targetConsoleForTesting;
 
   targetConsoleMethods = {};
-  for (let method in targetConsole) {
+  for (const method in targetConsole) {
     targetConsoleMethods[method] = console[method];
   }
 }
@@ -48,27 +65,59 @@ export function dangerous_setTargetConsoleForTesting(
 // v16 renderers should use this method to inject internals necessary to generate a component stack.
 // These internals will be used if the console is patched.
 // Injecting them separately allows the console to easily be patched or un-patched later (at runtime).
-export function registerRenderer(renderer: ReactRenderer): void {
-  const {getCurrentFiber, findFiberByHostInstance, version} = renderer;
+export function registerRenderer(
+  renderer: ReactRenderer,
+  onErrorOrWarning?: OnErrorOrWarning,
+): void {
+  const {
+    currentDispatcherRef,
+    getCurrentFiber,
+    findFiberByHostInstance,
+    version,
+  } = renderer;
 
   // Ignore React v15 and older because they don't expose a component stack anyway.
   if (typeof findFiberByHostInstance !== 'function') {
     return;
   }
 
-  if (typeof getCurrentFiber === 'function') {
-    const {getDisplayNameForFiber} = getInternalReactConstants(version);
+  // currentDispatcherRef gets injected for v16.8+ to support hooks inspection.
+  // getCurrentFiber gets injected for v16.9+.
+  if (currentDispatcherRef != null && typeof getCurrentFiber === 'function') {
+    const {ReactTypeOfWork} = getInternalReactConstants(version);
 
     injectedRenderers.set(renderer, {
+      currentDispatcherRef,
       getCurrentFiber,
-      getDisplayNameForFiber,
+      workTagMap: ReactTypeOfWork,
+      onErrorOrWarning,
     });
   }
 }
 
-// Patches whitelisted console methods to append component stack for the current fiber.
+const consoleSettingsRef = {
+  appendComponentStack: false,
+  breakOnConsoleErrors: false,
+  showInlineWarningsAndErrors: false,
+};
+
+// Patches console methods to append component stack for the current fiber.
 // Call unpatch() to remove the injected behavior.
-export function patch(): void {
+export function patch({
+  appendComponentStack,
+  breakOnConsoleErrors,
+  showInlineWarningsAndErrors,
+}: {
+  appendComponentStack: boolean,
+  breakOnConsoleErrors: boolean,
+  showInlineWarningsAndErrors: boolean,
+}): void {
+  // Settings may change after we've patched the console.
+  // Using a shared ref allows the patch function to read the latest values.
+  consoleSettingsRef.appendComponentStack = appendComponentStack;
+  consoleSettingsRef.breakOnConsoleErrors = breakOnConsoleErrors;
+  consoleSettingsRef.showInlineWarningsAndErrors = showInlineWarningsAndErrors;
+
   if (unpatchFn !== null) {
     // Don't patch twice.
     return;
@@ -77,7 +126,7 @@ export function patch(): void {
   const originalConsoleMethods = {};
 
   unpatchFn = () => {
-    for (let method in originalConsoleMethods) {
+    for (const method in originalConsoleMethods) {
       try {
         // $FlowFixMe property error|warn is not writable.
         targetConsole[method] = originalConsoleMethods[method];
@@ -91,51 +140,80 @@ export function patch(): void {
         targetConsole[method]);
 
       const overrideMethod = (...args) => {
-        try {
-          // If we are ever called with a string that already has a component stack, e.g. a React error/warning,
-          // don't append a second stack.
+        let shouldAppendWarningStack = false;
+        if (consoleSettingsRef.appendComponentStack) {
+          const lastArg = args.length > 0 ? args[args.length - 1] : null;
           const alreadyHasComponentStack =
-            args.length > 0 && FRAME_REGEX.exec(args[args.length - 1]);
+            lastArg !== null && isStringComponentStack(lastArg);
 
-          if (!alreadyHasComponentStack) {
-            // If there's a component stack for at least one of the injected renderers, append it.
-            // We don't handle the edge case of stacks for more than one (e.g. interleaved renderers?)
-            // eslint-disable-next-line no-for-of-loops/no-for-of-loops
-            for (let {
-              getCurrentFiber,
-              getDisplayNameForFiber,
-            } of injectedRenderers.values()) {
-              let current: ?Fiber = getCurrentFiber();
-              let ownerStack: string = '';
-              while (current != null) {
-                const name = getDisplayNameForFiber(current);
-                const owner = current._debugOwner;
-                const ownerName =
-                  owner != null ? getDisplayNameForFiber(owner) : null;
+          // If we are ever called with a string that already has a component stack,
+          // e.g. a React error/warning, don't append a second stack.
+          shouldAppendWarningStack = !alreadyHasComponentStack;
+        }
 
-                ownerStack += describeComponentFrame(
-                  name,
-                  current._debugSource,
-                  ownerName,
-                );
+        const shouldShowInlineWarningsAndErrors =
+          consoleSettingsRef.showInlineWarningsAndErrors &&
+          (method === 'error' || method === 'warn');
 
-                current = owner;
-              }
+        if (shouldAppendWarningStack || shouldShowInlineWarningsAndErrors) {
+          // Search for the first renderer that has a current Fiber.
+          // We don't handle the edge case of stacks for more than one (e.g. interleaved renderers?)
+          // eslint-disable-next-line no-for-of-loops/no-for-of-loops
+          for (const {
+            currentDispatcherRef,
+            getCurrentFiber,
+            onErrorOrWarning,
+            workTagMap,
+          } of injectedRenderers.values()) {
+            const current: ?Fiber = getCurrentFiber();
+            if (current != null) {
+              try {
+                if (shouldShowInlineWarningsAndErrors) {
+                  // patch() is called by two places: (1) the hook and (2) the renderer backend.
+                  // The backend is what impliments a message queue, so it's the only one that injects onErrorOrWarning.
+                  if (typeof onErrorOrWarning === 'function') {
+                    onErrorOrWarning(
+                      current,
+                      ((method: any): 'error' | 'warn'),
+                      // Copy args before we mutate them (e.g. adding the component stack)
+                      args.slice(),
+                    );
+                  }
+                }
 
-              if (ownerStack !== '') {
-                args.push(ownerStack);
+                if (shouldAppendWarningStack) {
+                  const componentStack = getStackByFiberInDevAndProd(
+                    workTagMap,
+                    current,
+                    currentDispatcherRef,
+                  );
+                  if (componentStack !== '') {
+                    args.push(componentStack);
+                  }
+                }
+              } catch (error) {
+                // Don't let a DevTools or React internal error interfere with logging.
+              } finally {
                 break;
               }
             }
           }
-        } catch (error) {
-          // Don't let a DevTools or React internal error interfere with logging.
+        }
+
+        if (consoleSettingsRef.breakOnConsoleErrors) {
+          // --- Welcome to debugging with React DevTools ---
+          // This debugger statement means that you've enabled the "break on warnings" feature.
+          // Use the browser's Call Stack panel to step out of this override function-
+          // to where the original warning or error was logged.
+          // eslint-disable-next-line no-debugger
+          debugger;
         }
 
         originalMethod(...args);
       };
 
       overrideMethod.__REACT_DEVTOOLS_ORIGINAL_METHOD__ = originalMethod;
+      originalMethod.__REACT_DEVTOOLS_OVERRIDE_METHOD__ = overrideMethod;
 
       // $FlowFixMe property error|warn is not writable.
       targetConsole[method] = overrideMethod;
@@ -143,7 +221,7 @@ export function patch(): void {
   });
 }
 
-// Removed component stack patch from whitelisted console methods.
+// Removed component stack patch from console methods.
 export function unpatch(): void {
   if (unpatchFn !== null) {
     unpatchFn();

@@ -7,13 +7,9 @@
  * @flow
  */
 
-import type {
-  ReactEventResponder,
-  ReactEventResponderInstance,
-  ReactFundamentalComponentInstance,
-} from 'shared/ReactTypes';
+import type {ReactFundamentalComponentInstance} from 'shared/ReactTypes';
 
-import {enableDeprecatedFlareAPI} from 'shared/ReactFeatureFlags';
+import {REACT_OPAQUE_ID_TYPE} from 'shared/ReactSymbols';
 
 export type Type = string;
 export type Props = Object;
@@ -44,11 +40,19 @@ export type ChildSet = void; // Unused
 export type TimeoutHandle = TimeoutID;
 export type NoTimeout = -1;
 export type EventResponder = any;
+export opaque type OpaqueIDType =
+  | string
+  | {
+      toString: () => string | void,
+      valueOf: () => string | void,
+    };
 
-export * from 'shared/HostConfigWithNoPersistence';
-export * from 'shared/HostConfigWithNoHydration';
+export type RendererInspectionConfig = $ReadOnly<{||}>;
 
-const EVENT_COMPONENT_CONTEXT = {};
+export * from 'react-reconciler/src/ReactFiberHostConfigWithNoPersistence';
+export * from 'react-reconciler/src/ReactFiberHostConfigWithNoHydration';
+export * from 'react-reconciler/src/ReactFiberHostConfigWithNoTestSelectors';
+
 const NO_CONTEXT = {};
 const UPDATE_SIGNAL = {};
 const nodeToInstanceMap = new WeakMap();
@@ -117,6 +121,10 @@ export function removeChild(
   parentInstance.children.splice(index, 1);
 }
 
+export function clearContainer(container: Container): void {
+  container.children.splice(0);
+}
+
 export function getRootHostContext(
   rootContainerInstance: Container,
 ): HostContext {
@@ -131,8 +139,9 @@ export function getChildHostContext(
   return NO_CONTEXT;
 }
 
-export function prepareForCommit(containerInfo: Container): void {
+export function prepareForCommit(containerInfo: Container): null | Object {
   // noop
+  return null;
 }
 
 export function resetAfterCommit(containerInfo: Container): void {
@@ -146,19 +155,9 @@ export function createInstance(
   hostContext: Object,
   internalInstanceHandle: Object,
 ): Instance {
-  let propsToUse = props;
-  if (enableDeprecatedFlareAPI) {
-    if (props.DEPRECATED_flareListeners != null) {
-      // We want to remove the "DEPRECATED_flareListeners" prop
-      // as we don't want it in the test renderer's
-      // instance props.
-      const {DEPRECATED_flareListeners, ...otherProps} = props; // eslint-disable-line
-      propsToUse = otherProps;
-    }
-  }
   return {
     type,
-    props: propsToUse,
+    props,
     isHidden: false,
     children: [],
     internalInstanceHandle,
@@ -203,27 +202,12 @@ export function shouldSetTextContent(type: string, props: Props): boolean {
   return false;
 }
 
-export function shouldDeprioritizeSubtree(type: string, props: Props): boolean {
-  return false;
-}
-
 export function createTextInstance(
   text: string,
   rootContainerInstance: Container,
   hostContext: Object,
   internalInstanceHandle: Object,
 ): TextInstance {
-  if (__DEV__) {
-    if (enableDeprecatedFlareAPI) {
-      if (hostContext === EVENT_COMPONENT_CONTEXT) {
-        console.error(
-          'validateDOMNesting: React event components cannot have text DOM nodes as children. ' +
-            'Wrap the child text "%s" in an element.',
-          text,
-        );
-      }
-    }
-  }
   return {
     text,
     isHidden: false,
@@ -300,22 +284,6 @@ export function unhideTextInstance(
   textInstance.isHidden = false;
 }
 
-export function DEPRECATED_mountResponderInstance(
-  responder: ReactEventResponder<any, any>,
-  responderInstance: ReactEventResponderInstance<any, any>,
-  props: Object,
-  state: Object,
-  instance: Instance,
-) {
-  // noop
-}
-
-export function DEPRECATED_unmountResponderInstance(
-  responderInstance: ReactEventResponderInstance<any, any>,
-): void {
-  // noop
-}
-
 export function getFundamentalComponentInstance(
   fundamentalInstance: ReactFundamentalComponentInstance<any, any>,
 ): Instance {
@@ -372,6 +340,59 @@ export function getInstanceFromNode(mockNode: Object) {
   return null;
 }
 
-export function beforeRemoveInstance(instance: any) {
+let clientId: number = 0;
+export function makeClientId(): OpaqueIDType {
+  return 'c_' + (clientId++).toString(36);
+}
+
+export function makeClientIdInDEV(warnOnAccessInDEV: () => void): OpaqueIDType {
+  const id = 'c_' + (clientId++).toString(36);
+  return {
+    toString() {
+      warnOnAccessInDEV();
+      return id;
+    },
+    valueOf() {
+      warnOnAccessInDEV();
+      return id;
+    },
+  };
+}
+
+export function isOpaqueHydratingObject(value: mixed): boolean {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    value.$$typeof === REACT_OPAQUE_ID_TYPE
+  );
+}
+
+export function makeOpaqueHydratingObject(
+  attemptToReadValue: () => void,
+): OpaqueIDType {
+  return {
+    $$typeof: REACT_OPAQUE_ID_TYPE,
+    toString: attemptToReadValue,
+    valueOf: attemptToReadValue,
+  };
+}
+
+export function beforeActiveInstanceBlur(internalInstanceHandle: Object) {
   // noop
+}
+
+export function afterActiveInstanceBlur() {
+  // noop
+}
+
+export function preparePortalMount(portalInstance: Instance): void {
+  // noop
+}
+
+export function prepareScopeUpdate(scopeInstance: Object, inst: Object): void {
+  nodeToInstanceMap.set(scopeInstance, inst);
+}
+
+export function getInstanceFromScope(scopeInstance: Object): null | Object {
+  return nodeToInstanceMap.get(scopeInstance) || null;
 }

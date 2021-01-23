@@ -14,7 +14,7 @@
  * environment.
  */
 
-import ReactFiberPersistentReconciler from 'react-reconciler/persistent';
+import ReactFiberReconciler from 'react-reconciler';
 import createReactNoop from './createReactNoop';
 
 export const {
@@ -24,6 +24,7 @@ export const {
   getOrCreateRootContainer,
   createRoot,
   createBlockingRoot,
+  createLegacyRoot,
   getChildrenAsJSX,
   getPendingChildrenAsJSX,
   createPortal,
@@ -46,7 +47,10 @@ export const {
   act,
   dumpTree,
   getRoot,
+  // TODO: Remove this once callers migrate to alternatives.
+  // This should only be used by React internals.
+  unstable_runWithPriority,
 } = createReactNoop(
-  ReactFiberPersistentReconciler, // reconciler
+  ReactFiberReconciler, // reconciler
   false, // useMutation
 );
